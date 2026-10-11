@@ -1,0 +1,4 @@
+qa/
+.qa-profile/
+*.tar.gz
+*.tgz

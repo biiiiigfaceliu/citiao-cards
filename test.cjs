@@ -1,0 +1,65 @@
+const { chromium } = require('C:/Users/刘大脸/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const fs = require('fs');
+const http = require('http');
+const path = require('path');
+const assert = require('assert');
+const vm = require('vm');
+const root = path.join(__dirname, 'dist');
+const html = fs.readFileSync(path.join(root,'index.html'),'utf8');
+for(const m of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(m[1]);
+for(const name of ['mobile.js','sw.js']) new vm.Script(fs.readFileSync(path.join(root,name),'utf8'));
+const types = {'.html':'text/html; charset=utf-8','.js':'application/javascript','.css':'text/css','.png':'image/png','.webmanifest':'application/manifest+json'};
+const server = http.createServer((req,res) => {
+  const name = new URL(req.url,'http://localhost').pathname;
+  const file = path.join(root, name === '/' ? 'index.html' : name.slice(1));
+  if(!file.startsWith(root + path.sep)) {res.writeHead(403); res.end(); return;}
+  fs.readFile(file,(e,data)=>{res.writeHead(e?404:200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(e?'Not found':data);});
+});
+(async()=>{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  let browser;
+  try {
+    browser = await chromium.launchPersistentContext(path.join(__dirname,'.qa-profile'),{channel:'msedge',headless:true,viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});
+    const context = browser;
+    const page=await context.newPage();
+    const errors=[]; page.on('pageerror',e=>errors.push(e.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.waitForFunction(()=>document.querySelector('#offline-status').textContent==='离线已就绪');
+    await page.fill('#term','纯过日子主义');
+    await page.fill('#pinyin','chún guò rì zi zhǔ yì');
+    await page.fill('#body','不比了，不装了，也不闹着要改变世界了。老老实实过日子，把肚子喂饱，把觉睡好。\n\n守住自己生活的基本盘。');
+    fs.mkdirSync(path.join(__dirname,'qa'),{recursive:true});
+    await page.screenshot({path:path.join(__dirname,'qa/mobile-editor.png'),fullPage:true});
+    await page.click('#preview-toggle');
+    await page.screenshot({path:path.join(__dirname,'qa/mobile-preview.png'),fullPage:true});
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    const ink=await page.evaluate(()=>{const c=document.querySelector('canvas');const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let n=0;for(let i=0;i<d.length;i+=4)if(d[i]<200||d[i+1]<200||d[i+2]<200)n++;return n;});
+    assert(ink>10000);
+    await page.click('#preview-save');
+    await page.waitForFunction(()=>document.querySelector('#export-image').naturalWidth===864);
+    const downloadPromise=page.waitForEvent('download');
+    await page.click('#download-image');
+    const download=await downloadPromise; await download.saveAs(path.join(__dirname,'qa/export.png'));
+    await page.click('#close-export');
+    await context.setOffline(true);
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('#offline-status').textContent==='离线已就绪');
+    assert.strictEqual(await page.inputValue('#term'),'纯过日子主义');
+    await page.fill('#term','八个字标题测试卡');
+    await page.click('#download');
+    await page.waitForFunction(()=>document.querySelector('#export-image').naturalWidth===864);
+    await page.click('#close-export');
+    await page.selectOption('#ratio','1080x1350');
+    await page.click('#download');
+    await page.waitForFunction(()=>document.querySelector('#export-image').naturalWidth===1080);
+    await page.click('#close-export');
+    await page.fill('#body','测试内容非常长。'.repeat(500));
+    assert(await page.isDisabled('#download'));
+    await page.fill('#body','正文第一段。\n\n正文第二段。');
+    await context.setOffline(false);
+    await page.setViewportSize({width:1366,height:900});
+    await page.screenshot({path:path.join(__dirname,'qa/desktop.png'),fullPage:true});
+    assert.deepStrictEqual(errors,[]);
+    console.log(JSON.stringify({passed:true,offlineReload:true,offlineExport:true,draftRestore:true,highResolutionExport:true,overflowGuard:true,canvasInkPixels:ink}));
+  } finally { if(browser) await browser.close(); server.close(); }
+})().catch(e=>{console.error(e);process.exitCode=1;});
