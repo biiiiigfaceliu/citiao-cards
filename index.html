@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="词卡" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icon-180.png" />
+  <link rel="icon" href="./icon-192.png" />
+  <link rel="stylesheet" href="./mobile.css" />
+  <title>词卡生成器</title>
+  <style>
+    :root { color-scheme: light; --ink: #111; --muted: #6b7280; --line: #e5e7eb; --button: #111827; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; color: var(--ink); background: #f3f4f6; }
+    main { display: grid; grid-template-columns: minmax(320px, 420px) minmax(360px, 1fr); gap: 24px; width: min(1280px, calc(100vw - 40px)); margin: 0 auto; padding: 28px 0; align-items: start; }
+    .controls, .preview { background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 16px 48px rgb(15 23 42 / 0.08); }
+    .controls { padding: 22px; display: grid; gap: 16px; }
+    h1 { margin: 0 0 4px; font-size: 22px; line-height: 1.25; letter-spacing: 0; }
+    .hint { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    label { display: grid; gap: 8px; font-size: 14px; font-weight: 700; }
+    input, textarea, select { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 10px 12px; font: inherit; font-size: 15px; line-height: 1.5; outline: none; background: #fff; }
+    textarea { min-height: 260px; resize: vertical; }
+    input:focus, textarea:focus, select:focus { border-color: #111827; box-shadow: 0 0 0 3px rgb(17 24 39 / 0.1); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding-top: 4px; }
+    button { border: 0; border-radius: 6px; padding: 11px 15px; font: inherit; font-weight: 700; cursor: pointer; background: var(--button); color: #fff; }
+    button.secondary { color: #111827; background: #e5e7eb; }
+    .preview { padding: 18px; display: grid; place-items: center; overflow: auto; }
+    canvas { display: block; width: min(100%, 540px); height: auto; background: #fff; box-shadow: 0 8px 30px rgb(15 23 42 / 0.12); }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; width: min(100vw - 24px, 680px); padding: 16px 0; } textarea { min-height: 220px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="controls" aria-label="词卡内容">
+      <div>
+        <h1>词卡生成器</h1>
+        <p class="hint" id="offline-status" role="status">正在准备离线文件</p>
+      </div>
+      <label>词条<input id="term" value="聊天多动症" maxlength="12" /></label>
+      <label>拼音<input id="pinyin" value="liáo tiān duō dòng zhèng" /></label>
+      <label>正文<textarea id="body">特指在跟好朋友聊天的时候，一个话题刚扔出去就能毫无征兆地切换到下一个话题，两个人想到啥就往对话框里扔啥，从聊八卦能无缝衔接到我最近买了个衣服然后那个东西好难吃。
+
+没有逻辑，没有重点，彼此还可以毫无障碍地聊下去。</textarea></label>
+      <div class="row">
+        <label>正文字号<select id="bodySize"><option value="30" selected>标准</option><option value="28">稍小</option><option value="32">稍大</option></select></label>
+        <label>图片比例<select id="ratio"><option value="864x1080" selected>4:5</option><option value="1080x1350">高清 4:5</option></select></label>
+      </div>
+      <p id="draft-status" role="status"></p>
+      <div class="actions"><button id="preview-toggle" class="secondary">预览词卡</button><button id="download">保存图片</button><button id="reset" class="secondary">恢复示例</button></div>
+    </section>
+    <section class="preview" aria-label="词卡预览"><button id="back-edit" class="secondary">返回编辑</button><canvas id="card" width="864" height="1080"></canvas><p id="layout-status" role="status"></p></section>
+  </main>
+  <dialog id="export-dialog" aria-labelledby="export-title">
+    <div class="export-header"><h2 id="export-title">保存词卡</h2><button id="close-export" class="secondary" aria-label="关闭">关闭</button></div>
+    <img id="export-image" alt="生成的词卡图片" />
+    <p id="export-status" role="status"></p>
+    <div class="export-actions"><button id="share-image">分享或存储图像</button><button id="download-image" class="secondary">下载 PNG</button></div>
+  </dialog>
+  <script>
+    var $ = function(id) { return document.getElementById(id); };
+    var canvas = $("card");
+    var ctx = canvas.getContext("2d");
+    var sample = {
+      term: "聊天多动症",
+      pinyin: "liáo tiān duō dòng zhèng",
+      body: "特指在跟好朋友聊天的时候，一个话题刚扔出去就能毫无征兆地切换到下一个话题，两个人想到啥就往对话框里扔啥，从聊八卦能无缝衔接到我最近买了个衣服然后那个东西好难吃。\n\n没有逻辑，没有重点，彼此还可以毫无障碍地聊下去。"
+    };
+    var fontStack = "\"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif";
+    var badLineStart = "，。！？、；：）】》」』”’,.!?;:)]}>";
+
+    function setCanvasSize() {
+      var size = $("ratio").value.split("x").map(Number);
+      canvas.width = size[0];
+      canvas.height = size[1];
+    }
+    function clearCanvas() { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    function drawGridText(term, scale) {
+      var chars = Array.from(term.trim() || "词条");
+      var maxGridWidth = canvas.width - 240 * scale;
+      var cell = Math.min(122 * scale, Math.floor(maxGridWidth / chars.length));
+      var gridWidth = cell * chars.length;
+      var left = (canvas.width - gridWidth) / 2;
+      var top = 124 * scale;
+      var titleSize = Math.min(cell * 0.84, 102 * scale);
+      ctx.save();
+      ctx.strokeStyle = "#ff1f1f";
+      ctx.lineWidth = Math.max(1, 1.4 * scale);
+      for (var i = 0; i < chars.length; i += 1) {
+        var x = left + i * cell;
+        ctx.strokeRect(x, top, cell, cell);
+        ctx.beginPath();
+        ctx.moveTo(x, top); ctx.lineTo(x + cell, top + cell);
+        ctx.moveTo(x + cell, top); ctx.lineTo(x, top + cell);
+        ctx.moveTo(x + cell / 2, top); ctx.lineTo(x + cell / 2, top + cell);
+        ctx.moveTo(x, top + cell / 2); ctx.lineTo(x + cell, top + cell / 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#000";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "900 " + titleSize + "px " + fontStack;
+      chars.forEach(function(char, i) {
+        ctx.fillText(char, left + i * cell + cell / 2, top + cell / 2 + cell * 0.065);
+      });
+      ctx.restore();
+      return top + cell;
+    }
+    function drawPinyin(text, y, scale) {
+      ctx.save();
+      ctx.fillStyle = "#111";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "700 " + (20 * scale) + "px Arial, " + fontStack;
+      ctx.fillText(text.trim(), canvas.width / 2, y + 68 * scale);
+      ctx.restore();
+      return y + 122 * scale;
+    }
+    function isCjk(char) { return /[\u3400-\u9fff]/.test(char); }
+    function lineScore(line) {
+      return Array.from(line).reduce(function(sum, char) { return sum + (isCjk(char) ? 1 : 0.55); }, 0);
+    }
+    function wrapParagraph(text, maxWidth, firstIndent) {
+      var chars = Array.from(text.trim());
+      var lines = [];
+      var line = "";
+      function currentLimit() {
+        return lines.length === 0 ? maxWidth - firstIndent : maxWidth;
+      }
+      chars.forEach(function(char) {
+        var test = line + char;
+        if (line && ctx.measureText(test).width > currentLimit()) {
+          if (badLineStart.indexOf(char) >= 0 && line.length > 1) {
+            lines.push(line.slice(0, -1));
+            line = line.slice(-1) + char;
+          } else {
+            lines.push(line);
+            line = char;
+          }
+        } else {
+          line = test;
+        }
+      });
+      if (line) lines.push(line);
+      if (lines.length > 1 && lineScore(lines[lines.length - 1]) <= 1.2 && lineScore(lines[lines.length - 2]) > 3) {
+        lines[lines.length - 1] = lines[lines.length - 2].slice(-1) + lines[lines.length - 1];
+        lines[lines.length - 2] = lines[lines.length - 2].slice(0, -1);
+      }
+      return lines.filter(Boolean).map(function(line, index) {
+        return { line: line, indent: index === 0 ? firstIndent : 0 };
+      });
+    }
+    function layoutBody(text, fontSize, maxWidth, maxHeight, scale) {
+      var size = fontSize;
+      var layout = [];
+      var lineHeight = size * 2.08;
+      var paragraphGap = size * 1.6;
+      while (size >= 23 * scale) {
+        ctx.font = "400 " + size + "px " + fontStack;
+        ctx.letterSpacing = (size * 0.08) + "px";
+        lineHeight = size * 2.08;
+        paragraphGap = size * 1.82;
+        layout = [];
+        var paragraphs = text.split(/\n\s*\n/g).map(function(part) { return part.replace(/\s*\n\s*/g, " ").trim(); }).filter(Boolean);
+        var firstIndent = size * 1;
+        paragraphs.forEach(function(paragraph, paragraphIndex) {
+          wrapParagraph(paragraph, maxWidth, firstIndent).forEach(function(item) { layout.push({ line: item.line, indent: item.indent, gap: false }); });
+          if (paragraphIndex < paragraphs.length - 1) layout.push({ line: "", indent: 0, gap: true });
+        });
+        var height = layout.reduce(function(sum, item) { return sum + (item.gap ? paragraphGap : lineHeight); }, 0);
+        if (height <= maxHeight) break;
+        size -= 1 * scale;
+      }
+      return { layout: layout, size: Math.max(size, 23 * scale), lineHeight: lineHeight, paragraphGap: paragraphGap };
+    }
+    function drawBody(text, startY, scale) {
+      var selectedSize = Number($("bodySize").value) * scale;
+      var maxWidth = 520 * scale;
+      var maxHeight = canvas.height - startY - 110 * scale;
+      var body = layoutBody(text, selectedSize, maxWidth, maxHeight, scale);
+      var totalHeight = body.layout.reduce(function(sum, item) { return sum + (item.gap ? body.paragraphGap : body.lineHeight); }, 0);
+      $("layout-status").textContent = totalHeight > maxHeight ? "正文偏长，可能超出词卡，请精简内容后再保存。" : "";
+      $("download").disabled = totalHeight > maxHeight;
+      var y = startY + Math.max(0, (maxHeight - totalHeight) * 0.04);
+      ctx.save();
+      ctx.fillStyle = "#111";
+      var blockLeft = (canvas.width - maxWidth) / 2;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.font = "400 " + body.size + "px " + fontStack;
+      ctx.letterSpacing = (body.size * 0.08) + "px";
+      body.layout.forEach(function(item) {
+        if (item.gap) { y += body.paragraphGap; return; }
+        ctx.fillText(item.line, blockLeft + (item.indent || 0), y);
+        y += body.lineHeight;
+      });
+      ctx.letterSpacing = "0px";
+      ctx.restore();
+    }
+    function render() {
+      setCanvasSize();
+      var scale = canvas.width / 864;
+      clearCanvas();
+      var titleBottom = drawGridText($("term").value, scale);
+      var bodyStart = drawPinyin($("pinyin").value, titleBottom, scale) + 62 * scale;
+      drawBody($("body").value, bodyStart, scale);
+    }
+    function filename() {
+      var cleaned = ($("term").value || "词卡").trim().replace(/[\\/:*?"<>|]/g, "");
+      return (cleaned || "词卡") + ".png";
+    }
+    function download() {
+      render();
+      var link = document.createElement("a");
+      link.download = filename();
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }
+    function reset() {
+      $("term").value = sample.term;
+      $("pinyin").value = sample.pinyin;
+      $("body").value = sample.body;
+      $("bodySize").value = "30";
+      $("ratio").value = "864x1080";
+      render();
+    }
+    ["term", "pinyin", "body", "bodySize", "ratio"].forEach(function(id) {
+      $(id).addEventListener("input", render);
+      $(id).addEventListener("change", render);
+    });
+    render();
+  </script>
+  <script src="./mobile.js"></script>
+</body>
+</html>
